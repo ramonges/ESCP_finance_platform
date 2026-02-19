@@ -3,7 +3,7 @@
 -- ============================================
 -- Run this entire script in your Supabase SQL Editor
 -- Project ID: qarzqmdbswuwjizxpmwt
--- This creates ALL tables from scratch for a brand new project
+-- Safe to re-run: uses IF NOT EXISTS and DROP POLICY IF EXISTS
 --
 -- Tables created:
 --   1. profiles (user profiles, linked to auth.users)
@@ -32,20 +32,23 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can view their own profile" ON public.profiles;
 CREATE POLICY "Users can view their own profile"
   ON public.profiles FOR SELECT
   USING (auth.uid() = id);
 
+DROP POLICY IF EXISTS "Users can insert their own profile" ON public.profiles;
 CREATE POLICY "Users can insert their own profile"
   ON public.profiles FOR INSERT
   WITH CHECK (auth.uid() = id);
 
+DROP POLICY IF EXISTS "Users can update their own profile" ON public.profiles;
 CREATE POLICY "Users can update their own profile"
   ON public.profiles FOR UPDATE
   USING (auth.uid() = id)
   WITH CHECK (auth.uid() = id);
 
--- Allow public read of profiles (needed for sharing feature to show author names)
+DROP POLICY IF EXISTS "Public profiles are viewable by everyone" ON public.profiles;
 CREATE POLICY "Public profiles are viewable by everyone"
   ON public.profiles FOR SELECT
   USING (true);
@@ -82,19 +85,23 @@ CREATE INDEX IF NOT EXISTS idx_user_answered_questions_strategy_category
 
 ALTER TABLE public.user_answered_questions ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can view their own answered questions" ON public.user_answered_questions;
 CREATE POLICY "Users can view their own answered questions"
   ON public.user_answered_questions FOR SELECT
   USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can insert their own answered questions" ON public.user_answered_questions;
 CREATE POLICY "Users can insert their own answered questions"
   ON public.user_answered_questions FOR INSERT
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can update their own answered questions" ON public.user_answered_questions;
 CREATE POLICY "Users can update their own answered questions"
   ON public.user_answered_questions FOR UPDATE
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can delete their own answered questions" ON public.user_answered_questions;
 CREATE POLICY "Users can delete their own answered questions"
   ON public.user_answered_questions FOR DELETE
   USING (auth.uid() = user_id);
@@ -136,19 +143,23 @@ CREATE INDEX IF NOT EXISTS idx_user_missed_questions_understood
 
 ALTER TABLE public.user_missed_questions ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can view their own missed questions" ON public.user_missed_questions;
 CREATE POLICY "Users can view their own missed questions"
   ON public.user_missed_questions FOR SELECT
   USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can insert their own missed questions" ON public.user_missed_questions;
 CREATE POLICY "Users can insert their own missed questions"
   ON public.user_missed_questions FOR INSERT
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can update their own missed questions" ON public.user_missed_questions;
 CREATE POLICY "Users can update their own missed questions"
   ON public.user_missed_questions FOR UPDATE
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can delete their own missed questions" ON public.user_missed_questions;
 CREATE POLICY "Users can delete their own missed questions"
   ON public.user_missed_questions FOR DELETE
   USING (auth.uid() = user_id);
@@ -178,19 +189,23 @@ CREATE INDEX IF NOT EXISTS idx_user_progress_user_id
 
 ALTER TABLE public.user_progress ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can view their own progress" ON public.user_progress;
 CREATE POLICY "Users can view their own progress"
   ON public.user_progress FOR SELECT
   USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can insert their own progress" ON public.user_progress;
 CREATE POLICY "Users can insert their own progress"
   ON public.user_progress FOR INSERT
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can update their own progress" ON public.user_progress;
 CREATE POLICY "Users can update their own progress"
   ON public.user_progress FOR UPDATE
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can delete their own progress" ON public.user_progress;
 CREATE POLICY "Users can delete their own progress"
   ON public.user_progress FOR DELETE
   USING (auth.uid() = user_id);
@@ -226,19 +241,23 @@ CREATE INDEX IF NOT EXISTS idx_user_section_progress_strategy_category
 
 ALTER TABLE public.user_section_progress ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can view their own section progress" ON public.user_section_progress;
 CREATE POLICY "Users can view their own section progress"
   ON public.user_section_progress FOR SELECT
   USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can insert their own section progress" ON public.user_section_progress;
 CREATE POLICY "Users can insert their own section progress"
   ON public.user_section_progress FOR INSERT
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can update their own section progress" ON public.user_section_progress;
 CREATE POLICY "Users can update their own section progress"
   ON public.user_section_progress FOR UPDATE
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can delete their own section progress" ON public.user_section_progress;
 CREATE POLICY "Users can delete their own section progress"
   ON public.user_section_progress FOR DELETE
   USING (auth.uid() = user_id);
@@ -251,6 +270,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS update_user_section_progress_updated_at ON public.user_section_progress;
 CREATE TRIGGER update_user_section_progress_updated_at
   BEFORE UPDATE ON public.user_section_progress
   FOR EACH ROW
@@ -280,10 +300,12 @@ CREATE INDEX IF NOT EXISTS idx_premium_purchases_stripe_session_id
 
 ALTER TABLE public.premium_purchases ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can view their own purchases" ON public.premium_purchases;
 CREATE POLICY "Users can view their own purchases"
   ON public.premium_purchases FOR SELECT
   USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Service role can insert purchases" ON public.premium_purchases;
 CREATE POLICY "Service role can insert purchases"
   ON public.premium_purchases FOR INSERT
   WITH CHECK (true);
@@ -296,6 +318,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS update_premium_purchases_updated_at ON public.premium_purchases;
 CREATE TRIGGER update_premium_purchases_updated_at
   BEFORE UPDATE ON public.premium_purchases
   FOR EACH ROW
@@ -330,19 +353,23 @@ CREATE INDEX IF NOT EXISTS idx_articles_category_created_at ON public.articles(c
 
 ALTER TABLE public.articles ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Anyone can view articles" ON public.articles;
 CREATE POLICY "Anyone can view articles"
   ON public.articles FOR SELECT
   USING (true);
 
+DROP POLICY IF EXISTS "Authenticated users can create articles" ON public.articles;
 CREATE POLICY "Authenticated users can create articles"
   ON public.articles FOR INSERT
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can update their own articles" ON public.articles;
 CREATE POLICY "Users can update their own articles"
   ON public.articles FOR UPDATE
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can delete their own articles" ON public.articles;
 CREATE POLICY "Users can delete their own articles"
   ON public.articles FOR DELETE
   USING (auth.uid() = user_id);
@@ -355,6 +382,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS update_articles_updated_at ON public.articles;
 CREATE TRIGGER update_articles_updated_at
   BEFORE UPDATE ON public.articles
   FOR EACH ROW
@@ -379,14 +407,17 @@ CREATE INDEX IF NOT EXISTS idx_article_likes_article_user ON public.article_like
 
 ALTER TABLE public.article_likes ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Anyone can view likes" ON public.article_likes;
 CREATE POLICY "Anyone can view likes"
   ON public.article_likes FOR SELECT
   USING (true);
 
+DROP POLICY IF EXISTS "Authenticated users can like articles" ON public.article_likes;
 CREATE POLICY "Authenticated users can like articles"
   ON public.article_likes FOR INSERT
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can unlike articles" ON public.article_likes;
 CREATE POLICY "Users can unlike articles"
   ON public.article_likes FOR DELETE
   USING (auth.uid() = user_id);
@@ -411,19 +442,23 @@ CREATE INDEX IF NOT EXISTS idx_article_comments_article_created ON public.articl
 
 ALTER TABLE public.article_comments ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Anyone can view comments" ON public.article_comments;
 CREATE POLICY "Anyone can view comments"
   ON public.article_comments FOR SELECT
   USING (true);
 
+DROP POLICY IF EXISTS "Authenticated users can create comments" ON public.article_comments;
 CREATE POLICY "Authenticated users can create comments"
   ON public.article_comments FOR INSERT
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can update their own comments" ON public.article_comments;
 CREATE POLICY "Users can update their own comments"
   ON public.article_comments FOR UPDATE
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can delete their own comments" ON public.article_comments;
 CREATE POLICY "Users can delete their own comments"
   ON public.article_comments FOR DELETE
   USING (auth.uid() = user_id);
@@ -436,6 +471,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS update_article_comments_updated_at ON public.article_comments;
 CREATE TRIGGER update_article_comments_updated_at
   BEFORE UPDATE ON public.article_comments
   FOR EACH ROW
@@ -473,20 +509,3 @@ $$ LANGUAGE sql STABLE;
 -- ============================================
 -- DONE!
 -- ============================================
--- Your ESCP Finance + database is fully set up with:
---   1. profiles - user profiles linked to auth
---   2. user_answered_questions - track all answers
---   3. user_missed_questions - track wrong answers for review
---   4. user_progress - overall progress per section
---   5. user_section_progress - resume position tracking
---   6. premium_purchases - Stripe payment records
---   7. articles - user publications (sharing)
---   8. article_likes - like tracking
---   9. article_comments - comment system
---  10. Helper functions for article stats
---
--- All tables have:
---   - Row Level Security (RLS) enabled
---   - Proper policies for user isolation
---   - Indexes for query performance
---   - Auto-updating timestamps where needed
