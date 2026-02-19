@@ -6,7 +6,6 @@ import { useRouter, usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import DashboardNav from '@/components/DashboardNav'
 import Statistics from '@/components/Statistics'
-import CustomInterviewPopup from '@/components/CustomInterviewPopup'
 import { Profile, UserStats } from '@/types'
 import { detectBlockTypeFromPath, calculateStats } from '@/lib/stats'
 import { 
@@ -319,9 +318,6 @@ export default function SelectBlockPage() {
 
         </div>
       </main>
-
-      {/* Custom Interview Popup */}
-      <CustomInterviewPopup />
 
       {/* Statistics Modal - Global Stats with Track Switching */}
       {showStats && (

@@ -73,7 +73,7 @@ export default function CustomInterviewCancelPage() {
                 Try Again
               </Link>
               <Link
-                href="/select-block"
+                href="/choose-career"
                 className="btn-secondary inline-flex items-center justify-center gap-2"
               >
                 <ArrowLeft className="w-4 h-4" />

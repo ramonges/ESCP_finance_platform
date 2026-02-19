@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server'
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url)
   const code = searchParams.get('code')
-  const next = searchParams.get('next') ?? '/select-block'
+  const next = searchParams.get('next') ?? '/choose-career'
   const source = searchParams.get('source') // 'signup' or 'login' to know where to redirect on error
 
   if (code) {
