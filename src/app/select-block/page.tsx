@@ -1,0 +1,339 @@
+'use client'
+
+import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
+import { useRouter, usePathname } from 'next/navigation'
+import { createClient } from '@/lib/supabase/client'
+import DashboardNav from '@/components/DashboardNav'
+import Statistics from '@/components/Statistics'
+import CustomInterviewPopup from '@/components/CustomInterviewPopup'
+import { Profile, UserStats } from '@/types'
+import { detectBlockTypeFromPath, calculateStats } from '@/lib/stats'
+import { 
+  Users, 
+  TrendingUp, 
+  Calculator,
+  ArrowRight,
+  Loader2,
+  Briefcase,
+  Target,
+  Sparkles
+} from 'lucide-react'
+
+const emptyStats: UserStats = {
+  overall: { total: 0, correct: 0, wrong: 0, percentage: 0 },
+  byCategory: {}
+}
+
+const mainBlocks = [
+  {
+    id: 'sales',
+    title: 'Sales',
+    icon: Users,
+    color: '#6366f1',
+    description: 'Master client relationships and product knowledge',
+    categories: [
+      { id: 'behavioral-fit', label: 'Behavioral & Fit' },
+      { id: 'market-awareness', label: 'Market Awareness' },
+      { id: 'product-knowledge', label: 'Product Knowledge' },
+      { id: 'sales-case', label: 'Sales Case' },
+    ],
+    href: '/sales'
+  },
+  {
+    id: 'trading',
+    title: 'Trading',
+    icon: TrendingUp,
+    color: '#2563eb',
+    description: 'Develop trading intuition and quantitative skills',
+    categories: [
+      { id: 'behavioral', label: 'Behavioral Questions' },
+      { id: 'mental-calculation', label: 'Mental Calculation' },
+      { id: 'proba-exercises', label: 'Proba Exercises' },
+      { id: 'brainteaser', label: 'Brainteaser' },
+      { id: 'trading-intuition', label: 'Trading Intuition' },
+      { id: 'ml-questions', label: 'ML Questions' },
+    ],
+    href: '/trading'
+  },
+  {
+    id: 'quant',
+    title: 'Quant',
+    icon: Calculator,
+    color: '#10b981',
+    description: 'Excel in quantitative analysis and coding',
+    categories: [
+      { id: 'mental-calculations', label: 'Mental Calculations' },
+      { id: 'probability-exercises', label: 'Probability Exercises' },
+      { id: 'brainteasers', label: 'Brainteasers' },
+      { id: 'coding-project', label: 'Coding Project' },
+      { id: 'statistics-ml', label: 'Statistics & ML' },
+      { id: 'trading-intuition', label: 'Trading Intuition' },
+      { id: 'research-discussion', label: 'Research Discussion' },
+    ],
+    href: '/quant'
+  },
+]
+
+const additionalBlocks = [
+  {
+    id: 'assets',
+    title: 'Asset Classes',
+    icon: Briefcase,
+    color: '#8b5cf6',
+    description: 'Master Equity, Fixed Income, Commodities, FX, Credit, Rates, and Structured Products',
+    href: '/assets'
+  },
+  {
+    id: 'strategies',
+    title: 'Trading Strategies',
+    icon: Target,
+    color: '#ec4899',
+    description: 'Master Equity, Fixed Income, Alternative, Macro, Quantitative, Income, and Multi-Asset strategies',
+    href: '/strategies'
+  },
+]
+
+export default function SelectBlockPage() {
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [showStats, setShowStats] = useState(false)
+  const [stats, setStats] = useState<UserStats>(emptyStats)
+  const [userId, setUserId] = useState<string | null>(null)
+  const router = useRouter()
+  const pathname = usePathname()
+  const supabase = createClient()
+  const blockType = detectBlockTypeFromPath(pathname)
+
+  useEffect(() => {
+    async function initialize() {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        
+        if (!user) {
+          router.push('/login')
+          return
+        }
+
+        setUserId(user.id)
+
+        // Fetch or create profile
+        let { data: profileData } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .single()
+
+        if (profileData) {
+          setProfile(profileData)
+        } else {
+          // Profile doesn't exist, create it (fallback in case callback didn't create it)
+          try {
+            const { data: newProfile, error: profileError } = await supabase
+              .from('profiles')
+              .insert({
+                id: user.id,
+                email: user.email,
+                full_name: user.user_metadata?.full_name || user.user_metadata?.name || null,
+                avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || null,
+                auth_provider: user.app_metadata?.provider || 'email',
+              })
+              .select()
+              .single()
+
+            if (profileError) {
+              console.error('Error creating profile:', profileError)
+            } else if (newProfile) {
+              setProfile(newProfile)
+            }
+          } catch (err) {
+            console.error('Error creating profile:', err)
+          }
+        }
+
+        // Load global stats (all tracks)
+        const { data: answeredQuestions } = await supabase
+          .from('user_answered_questions')
+          .select('*')
+          .eq('user_id', user.id)
+
+        if (answeredQuestions) {
+          const newStats = calculateStats(answeredQuestions, null) // null = all tracks
+          setStats(newStats)
+        }
+      } catch (error) {
+        console.error('Error initializing:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    initialize()
+  }, [router, supabase])
+
+  // Function to reload stats from database
+  const reloadStats = useCallback(async () => {
+    if (!userId) return
+
+    try {
+      const { data: answeredQuestions } = await supabase
+        .from('user_answered_questions')
+        .select('*')
+        .eq('user_id', userId)
+
+      if (answeredQuestions) {
+        const newStats = calculateStats(answeredQuestions, null) // null = all tracks
+        setStats(newStats)
+      }
+    } catch (error) {
+      console.error('Error reloading stats:', error)
+    }
+  }, [userId, supabase])
+
+  // Handle opening stats - reload from database first
+  const handleOpenStats = useCallback(async () => {
+    await reloadStats()
+    setShowStats(true)
+  }, [reloadStats])
+
+  if (loading) {
+    return (
+      <div className="min-h-screen gradient-bg flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-[#2563eb]" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen gradient-bg">
+      <DashboardNav profile={profile} onOpenStats={handleOpenStats} blockType={blockType} />
+
+      <main className="pt-16 sm:pt-24 pb-12 px-4 sm:px-6">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center mb-8 sm:mb-12">
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-4">
+              Choose Your Path
+            </h1>
+            <p className="text-[#9ca3af] text-base sm:text-lg max-w-2xl mx-auto">
+              Select a track to start your interview preparation journey
+            </p>
+          </div>
+
+          {/* Main Tracks: Sales, Trading, Quant */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8 mb-12">
+            {mainBlocks.map((block) => {
+              const Icon = block.icon
+              return (
+                <Link
+                  key={block.id}
+                  href={block.href}
+                  className="bg-[#111827] border border-[#1f2937] rounded-xl sm:rounded-2xl p-6 sm:p-8 hover:border-[#374151] transition-all duration-200 card-hover group"
+                >
+                  <div 
+                    className="w-12 h-12 sm:w-16 sm:h-16 rounded-xl flex items-center justify-center mb-4 sm:mb-6"
+                    style={{ backgroundColor: `${block.color}20` }}
+                  >
+                    <Icon className="w-6 h-6 sm:w-8 sm:h-8" style={{ color: block.color }} />
+                  </div>
+
+                  <h2 className="text-xl sm:text-2xl font-bold mb-2">{block.title}</h2>
+                  <p className="text-[#9ca3af] text-sm sm:text-base mb-4 sm:mb-6">
+                    {block.description}
+                  </p>
+
+                  <div className="space-y-2 mb-4 sm:mb-6">
+                    {block.categories.map((cat) => (
+                      <div 
+                        key={cat.id}
+                        className="flex items-center gap-2 text-xs sm:text-sm text-[#6b7280]"
+                      >
+                        <div 
+                          className="w-1.5 h-1.5 rounded-full"
+                          style={{ backgroundColor: block.color }}
+                        />
+                        <span>{cat.label}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center gap-2 text-sm sm:text-base font-medium group-hover:gap-3 transition-all" style={{ color: block.color }}>
+                    <span>Start Practicing</span>
+                    <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </div>
+                </Link>
+              )
+            })}
+          </div>
+
+          {/* Custom Interview Link - Subtle */}
+          <div className="mb-8 sm:mb-12">
+            <Link
+              href="/custom-interview"
+              className="block bg-[#111827] border border-[#374151] rounded-xl sm:rounded-2xl p-4 sm:p-6 hover:border-[#2563eb]/50 transition-all duration-200 group"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 sm:w-12 sm:h-12 bg-[#2563eb]/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Sparkles className="w-5 h-5 sm:w-6 sm:h-6 text-[#2563eb]" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg sm:text-xl font-semibold mb-1">Custom Interview</h3>
+                  <p className="text-sm text-[#9ca3af]">
+                    Get personalized questions for your target role and company
+                  </p>
+                </div>
+                <ArrowRight className="w-5 h-5 text-[#6b7280] group-hover:text-[#2563eb] group-hover:translate-x-1 transition-all" />
+              </div>
+            </Link>
+          </div>
+
+          {/* Additional Blocks: Assets and Strategies */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-8">
+            {additionalBlocks.map((block) => {
+              const Icon = block.icon
+              return (
+                <Link
+                  key={block.id}
+                  href={block.href}
+                  className="bg-[#111827] border border-[#1f2937] rounded-xl sm:rounded-2xl p-6 sm:p-8 hover:border-[#374151] transition-all duration-200 card-hover group"
+                >
+                  <div 
+                    className="w-12 h-12 sm:w-16 sm:h-16 rounded-xl flex items-center justify-center mb-4 sm:mb-6"
+                    style={{ backgroundColor: `${block.color}20` }}
+                  >
+                    <Icon className="w-6 h-6 sm:w-8 sm:h-8" style={{ color: block.color }} />
+                  </div>
+
+                  <h2 className="text-xl sm:text-2xl font-bold mb-2">{block.title}</h2>
+                  <p className="text-[#9ca3af] text-sm sm:text-base mb-4 sm:mb-6">
+                    {block.description}
+                  </p>
+
+                  <div className="flex items-center gap-2 text-sm sm:text-base font-medium group-hover:gap-3 transition-all" style={{ color: block.color }}>
+                    <span>Explore {block.title}</span>
+                    <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </div>
+                </Link>
+              )
+            })}
+          </div>
+
+        </div>
+      </main>
+
+      {/* Custom Interview Popup */}
+      <CustomInterviewPopup />
+
+      {/* Statistics Modal - Global Stats with Track Switching */}
+      {showStats && (
+        <Statistics 
+          stats={stats} 
+          onClose={() => setShowStats(false)} 
+          blockType={null}
+          userId={userId}
+          showGlobalStats={true}
+        />
+      )}
+    </div>
+  )
+}
+

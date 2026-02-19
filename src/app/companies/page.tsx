@@ -1,0 +1,338 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useRouter, usePathname } from 'next/navigation'
+import { createClient } from '@/lib/supabase/client'
+import DashboardNav from '@/components/DashboardNav'
+import Statistics from '@/components/Statistics'
+import { Profile, UserStats } from '@/types'
+import { companiesData, Company, CompanyType } from '@/data/companies'
+import { Search, ExternalLink, Building2, MapPin, Loader2, X, Banknote, TrendingUp } from 'lucide-react'
+import { calculateStats, detectBlockTypeFromPath } from '@/lib/stats'
+
+const emptyStats: UserStats = {
+  overall: { total: 0, correct: 0, wrong: 0, percentage: 0 },
+  byCategory: {}
+}
+
+export default function CompaniesPage() {
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [filterType, setFilterType] = useState<CompanyType | 'all'>('all')
+  const [showStats, setShowStats] = useState(false)
+  const [stats, setStats] = useState<UserStats>(emptyStats)
+  const router = useRouter()
+  const pathname = usePathname()
+  const supabase = createClient()
+  const blockType = detectBlockTypeFromPath(pathname)
+
+  useEffect(() => {
+    async function initialize() {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        
+        if (!user) {
+          router.push('/login')
+          return
+        }
+
+        // Fetch profile
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .single()
+
+        if (profileData) {
+          setProfile(profileData)
+        }
+
+        // Fetch stats
+        const { data: answeredQuestions } = await supabase
+          .from('user_answered_questions')
+          .select('*')
+          .eq('user_id', user.id)
+
+        if (answeredQuestions) {
+          // Calculate stats filtered by block type
+          const newStats = calculateStats(answeredQuestions, blockType || undefined)
+          setStats(newStats)
+        }
+      } catch (error) {
+        console.error('Error initializing:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    initialize()
+  }, [router, supabase])
+
+  // Normalize city names to merge variations (e.g., "New York City" -> "New York")
+  // This ensures cities with different names but same location are grouped together
+  const normalizeCityName = (cityName: string): string => {
+    const normalized = cityName.toLowerCase().trim()
+    
+    // Map of variations to standard names
+    // Only include actual variations found in the data
+    const cityNormalizations: Record<string, string> = {
+      // New York variations - the only real variation in our data
+      'new york city': 'New York',
+      'new york': 'New York',
+      'nyc': 'New York',
+    }
+    
+    // Check if we have a normalization for this city
+    if (cityNormalizations[normalized]) {
+      return cityNormalizations[normalized]
+    }
+    
+    // If no normalization found, return original city name as-is
+    // This preserves all other cities exactly as they appear
+    return cityName
+  }
+
+  // First, merge regions and cities from all data sources
+  // Group by region, then by normalized city name
+  const regionMap = new Map<string, Map<string, Company[]>>()
+  
+  companiesData.forEach(region => {
+    if (!regionMap.has(region.region)) {
+      regionMap.set(region.region, new Map())
+    }
+    const cityMap = regionMap.get(region.region)!
+    
+    region.cities.forEach(city => {
+      city.companies.forEach(company => {
+        const normalizedCity = normalizeCityName(city.city)
+        if (!cityMap.has(normalizedCity)) {
+          cityMap.set(normalizedCity, [])
+        }
+        cityMap.get(normalizedCity)!.push(company)
+      })
+    })
+  })
+
+  // Convert to filtered data structure
+  const filteredData = Array.from(regionMap.entries()).map(([regionName, cityMap]) => {
+    // Filter cities and companies based on search and type
+    const filteredCities = Array.from(cityMap.entries())
+      .map(([normalizedCity, companies]) => {
+        const filteredCompanies = companies.filter(company => {
+          const matchesSearch = 
+            company.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            company.city.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            company.region.toLowerCase().includes(searchQuery.toLowerCase())
+          
+          const matchesType = filterType === 'all' || company.type === filterType
+          
+          return matchesSearch && matchesType
+        })
+
+        return {
+          city: normalizedCity,
+          companies: filteredCompanies.sort((a, b) => {
+            // Sort by type (banks first) then by name
+            if (a.type !== b.type) {
+              return a.type === 'bank' ? -1 : 1
+            }
+            return a.name.localeCompare(b.name)
+          })
+        }
+      })
+      .filter(city => city.companies.length > 0)
+      .sort((a, b) => a.city.localeCompare(b.city)) // Sort cities alphabetically
+
+    return {
+      region: regionName,
+      cities: filteredCities
+    }
+  }).filter(region => region.cities.length > 0)
+
+  // Calculate unique banks and funds counts
+  const uniqueBanks = new Set<string>()
+  const uniqueFunds = new Set<string>()
+  
+  companiesData.forEach(region => {
+    region.cities.forEach(city => {
+      city.companies.forEach(company => {
+        if (company.type === 'bank') {
+          uniqueBanks.add(company.name)
+        } else if (company.type === 'fund') {
+          uniqueFunds.add(company.name)
+        }
+      })
+    })
+  })
+
+  const uniqueBanksCount = uniqueBanks.size
+  const uniqueFundsCount = uniqueFunds.size
+
+  const handleCompanyClick = (website: string) => {
+    window.open(website, '_blank', 'noopener,noreferrer')
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen gradient-bg flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-[#2563eb]" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen gradient-bg">
+      <DashboardNav profile={profile} onOpenStats={() => setShowStats(true)} blockType={blockType} />
+
+      <main className="pt-20 sm:pt-24 pb-12 px-4 sm:px-6">
+        <div className="max-w-6xl mx-auto">
+          {/* Header */}
+          <div className="mb-6 sm:mb-8">
+            <h1 className="text-2xl sm:text-3xl font-bold mb-2">Companies</h1>
+            <p className="text-sm sm:text-base text-[#9ca3af]">
+              Explore {uniqueBanksCount} banks and {uniqueFundsCount} prop firms by location
+            </p>
+          </div>
+
+          {/* Filters */}
+          <div className="mb-4 sm:mb-6 flex flex-wrap gap-2 sm:gap-3">
+            <button
+              onClick={() => setFilterType('all')}
+              className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${
+                filterType === 'all'
+                  ? 'bg-[#2563eb] text-white'
+                  : 'bg-[#1f2937] text-[#9ca3af] hover:bg-[#374151]'
+              }`}
+            >
+              All
+            </button>
+            <button
+              onClick={() => setFilterType('bank')}
+              className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${
+                filterType === 'bank'
+                  ? 'bg-[#2563eb] text-white'
+                  : 'bg-[#1f2937] text-[#9ca3af] hover:bg-[#374151]'
+              }`}
+            >
+              <Banknote className="w-4 h-4" />
+              Banks
+            </button>
+            <button
+              onClick={() => setFilterType('fund')}
+              className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${
+                filterType === 'fund'
+                  ? 'bg-[#2563eb] text-white'
+                  : 'bg-[#1f2937] text-[#9ca3af] hover:bg-[#374151]'
+              }`}
+            >
+              <TrendingUp className="w-4 h-4" />
+              Funds
+            </button>
+          </div>
+
+          {/* Search Bar */}
+          <div className="mb-6 sm:mb-8">
+            <div className="relative group">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6b7280] pointer-events-none transition-colors group-focus-within:text-[#2563eb] z-10" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by company name, city, or region..."
+                className="w-full pr-10 py-3.5 sm:py-4 bg-[#111827] border border-[#1f2937] rounded-xl text-white placeholder-[#6b7280] focus:outline-none focus:ring-2 focus:ring-[#2563eb]/20 focus:border-[#2563eb] transition-all duration-200 text-sm sm:text-base"
+                style={{ paddingLeft: '3.5rem' }}
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded-full hover:bg-[#1f2937] transition-colors text-[#6b7280] hover:text-white z-10"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Companies List */}
+          {filteredData.length === 0 ? (
+            <div className="bg-[#111827] border border-[#1f2937] rounded-2xl p-12 text-center">
+              <Search className="w-12 h-12 text-[#6b7280] mx-auto mb-4" />
+              <h2 className="text-xl font-semibold mb-2">No companies found</h2>
+              <p className="text-[#9ca3af]">
+                Try adjusting your search query or filter
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-6 sm:space-y-8">
+              {filteredData.map((region) => (
+                <div key={region.region} className="bg-[#111827] border border-[#1f2937] rounded-xl p-4 sm:p-6">
+                  <h2 className="text-xl sm:text-2xl font-bold mb-4 sm:mb-6 flex items-center gap-2">
+                    <MapPin className="w-5 h-5 sm:w-6 sm:h-6 text-[#2563eb]" />
+                    {region.region}
+                  </h2>
+
+                  <div className="space-y-6 sm:space-y-8">
+                    {region.cities.map((city) => (
+                      <div key={city.city} className="border-l-2 border-[#1f2937] pl-4 sm:pl-6">
+                        <h3 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4 flex items-center gap-2">
+                          <Building2 className="w-4 h-4 sm:w-5 sm:h-5 text-[#6366f1]" />
+                          {city.city}
+                          <span className="text-sm text-[#6b7280] font-normal">
+                            ({city.companies.length})
+                          </span>
+                        </h3>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
+                          {city.companies.map((company) => (
+                            <button
+                              key={`${company.city}-${company.name}`}
+                              onClick={() => handleCompanyClick(company.website)}
+                              className="group flex items-center justify-between p-3 sm:p-4 bg-[#0a0f1a] border border-[#1f2937] rounded-lg hover:border-[#2563eb] hover:bg-[#1a1f2e] transition-all text-left"
+                            >
+                              <div className="flex items-center gap-2 flex-1 min-w-0">
+                                {company.type === 'bank' ? (
+                                  <Banknote className="w-4 h-4 text-[#6366f1] flex-shrink-0" />
+                                ) : (
+                                  <TrendingUp className="w-4 h-4 text-[#10b981] flex-shrink-0" />
+                                )}
+                                <span className="text-sm sm:text-base text-[#e8eaed] group-hover:text-white transition-colors truncate">
+                                  {company.name}
+                                </span>
+                              </div>
+                              <ExternalLink className="w-4 h-4 sm:w-5 sm:h-5 text-[#6b7280] group-hover:text-[#2563eb] transition-colors flex-shrink-0 ml-2" />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Summary */}
+          {searchQuery === '' && filterType === 'all' && (
+            <div className="mt-8 text-center text-sm text-[#6b7280]">
+              {companiesData.reduce((total, region) => 
+                total + region.cities.reduce((cityTotal, city) => cityTotal + city.companies.length, 0), 0
+              )} companies across {companiesData.reduce((total, region) => total + region.cities.length, 0)} cities
+            </div>
+          )}
+        </div>
+      </main>
+
+      {/* Statistics Modal */}
+      {showStats && (
+        <Statistics 
+          stats={stats} 
+          onClose={() => setShowStats(false)} 
+          blockType={blockType || undefined}
+          userId={profile?.id || null}
+          showGlobalStats={true}
+        />
+      )}
+    </div>
+  )
+}

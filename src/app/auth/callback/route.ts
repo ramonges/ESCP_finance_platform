@@ -1,0 +1,141 @@
+import { createClient } from '@/lib/supabase/server'
+import { NextResponse } from 'next/server'
+
+export async function GET(request: Request) {
+  const { searchParams, origin } = new URL(request.url)
+  const code = searchParams.get('code')
+  const next = searchParams.get('next') ?? '/select-block'
+  const source = searchParams.get('source') // 'signup' or 'login' to know where to redirect on error
+
+  if (code) {
+    try {
+      const supabase = await createClient()
+      const { data, error } = await supabase.auth.exchangeCodeForSession(code)
+      
+      if (error) {
+        console.error('Error exchanging code for session:', {
+          message: error.message,
+          status: error.status,
+          code: error.code,
+        })
+        
+        // Determine error URL - redirect to signup if source is signup, otherwise login
+        const productionUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'
+        const isLocalEnv = process.env.NODE_ENV === 'development'
+        const errorPage = source === 'signup' ? 'signup' : 'login'
+        const errorUrl = isLocalEnv 
+          ? `${origin}/${errorPage}?error=${encodeURIComponent(error.message || 'Could not authenticate user')}` 
+          : `${productionUrl}/${errorPage}?error=${encodeURIComponent(error.message || 'Could not authenticate user')}`
+        return NextResponse.redirect(errorUrl)
+      }
+      
+      // Successfully authenticated
+      if (data?.session && data?.user) {
+        console.log('OAuth callback successful - User ID:', data.user.id, 'Email:', data.user.email, 'Is new user:', data.user.created_at === data.user.updated_at)
+        
+        // Ensure profile exists for the user (important for OAuth users)
+        try {
+          const { data: existingProfile, error: selectError } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('id', data.user.id)
+            .single()
+
+          if (selectError && selectError.code !== 'PGRST116') {
+            // PGRST116 is "not found" which is expected for new users
+            console.error('Error checking existing profile:', selectError)
+          }
+
+          // If profile doesn't exist, create it (this happens for new OAuth users)
+          if (!existingProfile) {
+            console.log('Creating new profile for OAuth user:', data.user.id)
+            const { data: newProfile, error: profileError } = await supabase
+              .from('profiles')
+              .insert({
+                id: data.user.id,
+                email: data.user.email,
+                full_name: data.user.user_metadata?.full_name || data.user.user_metadata?.name || null,
+                avatar_url: data.user.user_metadata?.avatar_url || data.user.user_metadata?.picture || null,
+                auth_provider: data.user.app_metadata?.provider || 'email',
+              })
+              .select()
+              .single()
+
+            if (profileError) {
+              console.error('Error creating profile:', {
+                message: profileError.message,
+                code: profileError.code,
+                details: profileError.details,
+                hint: profileError.hint
+              })
+              // Don't fail the auth flow if profile creation fails, but log it
+            } else {
+              console.log('Profile created successfully:', newProfile?.id)
+            }
+          } else {
+            console.log('Profile already exists for user:', existingProfile.id)
+          }
+        } catch (profileErr) {
+          console.error('Exception checking/creating profile:', profileErr)
+          // Don't fail the auth flow if profile check/creation fails
+        }
+
+        // Determine the correct base URL for redirection
+        const isLocalEnv = process.env.NODE_ENV === 'development'
+        const productionUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'
+        
+        // Get forwarded host to check if we should use production domain
+        const forwardedHost = request.headers.get('x-forwarded-host')
+        const forwardedProto = request.headers.get('x-forwarded-proto') || 'https'
+        
+        let redirectUrl: string
+        
+        if (isLocalEnv) {
+          // Development: use origin
+          redirectUrl = `${origin}${next}`
+        } else if (forwardedHost && forwardedHost.includes('localhost')) {
+          // Production: use the custom domain if available
+          redirectUrl = `${forwardedProto}://${forwardedHost}${next}`
+        } else if (forwardedHost && !forwardedHost.includes('vercel.app')) {
+          // Use forwarded host if it's not Vercel (could be another custom domain)
+          redirectUrl = `${forwardedProto}://${forwardedHost}${next}`
+        } else {
+          // Fallback: use production URL from env or default
+          redirectUrl = `${productionUrl}${next}`
+        }
+        
+        return NextResponse.redirect(redirectUrl)
+      } else {
+        // No session returned
+        console.error('No session returned after code exchange')
+        const productionUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'
+        const isLocalEnv = process.env.NODE_ENV === 'development'
+        const errorPage = source === 'signup' ? 'signup' : 'login'
+        const errorUrl = isLocalEnv 
+          ? `${origin}/${errorPage}?error=${encodeURIComponent('Authentication failed: No session created')}` 
+          : `${productionUrl}/${errorPage}?error=${encodeURIComponent('Authentication failed: No session created')}`
+        return NextResponse.redirect(errorUrl)
+      }
+    } catch (err) {
+      console.error('Exception in callback route:', err)
+      const productionUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'
+      const isLocalEnv = process.env.NODE_ENV === 'development'
+      const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'
+      const errorPage = source === 'signup' ? 'signup' : 'login'
+      const errorUrl = isLocalEnv 
+        ? `${origin}/${errorPage}?error=${encodeURIComponent(errorMessage)}` 
+        : `${productionUrl}/${errorPage}?error=${encodeURIComponent(errorMessage)}`
+      return NextResponse.redirect(errorUrl)
+    }
+  }
+
+  // No code provided, redirect based on source
+  const productionUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'
+  const isLocalEnv = process.env.NODE_ENV === 'development'
+  const errorPage = source === 'signup' ? 'signup' : 'login'
+  const errorUrl = isLocalEnv 
+    ? `${origin}/${errorPage}?error=No authentication code provided` 
+    : `${productionUrl}/${errorPage}?error=No authentication code provided`
+  return NextResponse.redirect(errorUrl)
+}
+

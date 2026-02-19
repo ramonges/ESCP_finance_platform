@@ -1,0 +1,787 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { createClient } from '@/lib/supabase/client'
+import DashboardNav from '@/components/DashboardNav'
+import { Profile, BlockType, AssetCategory } from '@/types'
+import { getInterviewFlow, InterviewFlow } from '@/data/customInterviewQuestions'
+import { assetQuestions } from '@/data/assetQuestions'
+import { CheckCircle, XCircle } from 'lucide-react'
+import { 
+  Users, 
+  TrendingUp, 
+  Calculator,
+  ArrowRight,
+  ArrowLeft,
+  Loader2,
+  Building2,
+  Briefcase,
+  Check,
+  Sparkles,
+  Download,
+  FileText
+} from 'lucide-react'
+import jsPDF from 'jspdf'
+
+type CompanyType = 'bank' | 'hedge-fund'
+
+export default function CustomInterviewPage() {
+  const [step, setStep] = useState(1)
+  const [blockType, setBlockType] = useState<BlockType | null>(null)
+  const [tradingDesk, setTradingDesk] = useState<AssetCategory | null>(null)
+  const [companyType, setCompanyType] = useState<CompanyType | null>(null)
+  const [interviewFlow, setInterviewFlow] = useState<InterviewFlow | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  // State for probability question answers
+  const [userAnswers, setUserAnswers] = useState<Record<string, string>>({})
+  const [answerFeedback, setAnswerFeedback] = useState<Record<string, boolean | null>>({})
+  const router = useRouter()
+  const supabase = createClient()
+
+  useEffect(() => {
+    async function initialize() {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        
+        if (!user) {
+          router.push('/login')
+          return
+        }
+
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .single()
+
+        if (profileData) {
+          setProfile(profileData)
+        }
+      } catch (error) {
+        console.error('Error initializing:', error)
+      }
+    }
+
+    initialize()
+  }, [router, supabase])
+
+  useEffect(() => {
+    if (step === 4 && blockType && companyType && tradingDesk) {
+      setLoading(true)
+      // Get the asset category object
+      const assetCategory = assetQuestions[tradingDesk] || undefined
+      // Get the interview flow based on selections
+      const flow = getInterviewFlow(blockType, companyType, assetCategory)
+      setInterviewFlow(flow)
+      setLoading(false)
+      // Reset answers when flow changes
+      setUserAnswers({})
+      setAnswerFeedback({})
+    }
+  }, [step, blockType, companyType, tradingDesk])
+
+  // Helper function to extract numeric value from answer string or user input
+  const extractNumericAnswer = (answerText: string): number | null => {
+    if (!answerText || typeof answerText !== 'string') return null
+    
+    // Clean the input
+    const cleaned = answerText.trim()
+    
+    // Try to find numbers - check fractions first
+    // Look for patterns like "3/8", "3/2", "1.5", "37.5%", "2,500,000", "$2.5 million", "≈ 1.806", etc.
+    
+    // First, try to match fractions (most specific)
+    const fractionPattern = /(\d+\.?\d*)\s*\/\s*(\d+\.?\d*)/
+    const fractionMatch = cleaned.match(fractionPattern)
+    if (fractionMatch) {
+      const numerator = parseFloat(fractionMatch[1])
+      const denominator = parseFloat(fractionMatch[2])
+      if (denominator !== 0 && !isNaN(numerator) && !isNaN(denominator)) {
+        return numerator / denominator
+      }
+    }
+    
+    // Try percentage
+    const percentagePattern = /(\d+\.?\d*)\s*%/
+    const percentageMatch = cleaned.match(percentagePattern)
+    if (percentageMatch) {
+      const num = parseFloat(percentageMatch[1])
+      if (!isNaN(num)) {
+        return num / 100
+      }
+    }
+    
+    // Try currency with scale words
+    const currencyPattern = /[\$]?\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(million|billion|thousand)/i
+    const currencyMatch = cleaned.match(currencyPattern)
+    if (currencyMatch) {
+      const num = parseFloat(currencyMatch[1].replace(/,/g, ''))
+      const scale = currencyMatch[2].toLowerCase()
+      if (!isNaN(num)) {
+        if (scale === 'million') return num * 1000000
+        if (scale === 'billion') return num * 1000000000
+        if (scale === 'thousand') return num * 1000
+      }
+    }
+    
+    // Try approximation symbol
+    const approxPattern = /≈\s*(\d+\.?\d*)/
+    const approxMatch = cleaned.match(approxPattern)
+    if (approxMatch) {
+      const num = parseFloat(approxMatch[1].replace(/,/g, ''))
+      if (!isNaN(num)) {
+        return num
+      }
+    }
+    
+    // Try plain number (most general, check last)
+    const numberPattern = /(-?\d{1,3}(?:,\d{3})*(?:\.\d+)?)/
+    const numberMatch = cleaned.match(numberPattern)
+    if (numberMatch) {
+      const num = parseFloat(numberMatch[1].replace(/,/g, ''))
+      if (!isNaN(num)) {
+        return num
+      }
+    }
+    
+    return null
+  }
+
+  // Helper function to check if user answer is correct
+  const checkAnswer = (questionId: string, correctAnswer: string, userAnswer: string): boolean => {
+    // First try to extract numeric values from both
+    const correctNumeric = extractNumericAnswer(correctAnswer)
+    const userNumeric = extractNumericAnswer(userAnswer)
+    
+    // If both are numeric, compare them
+    if (correctNumeric !== null && userNumeric !== null) {
+      // Allow small tolerance for floating point errors (0.1% or 0.01 absolute, whichever is larger)
+      const tolerance = Math.max(Math.abs(correctNumeric) * 0.001, 0.01)
+      return Math.abs(userNumeric - correctNumeric) <= tolerance
+    }
+    
+    // If we couldn't extract numbers, do text comparison (case-insensitive, trimmed)
+    const correctText = correctAnswer.toLowerCase().trim()
+    const userText = userAnswer.toLowerCase().trim()
+    
+    // Exact match
+    if (correctText === userText) {
+      return true
+    }
+    
+    // Try to match just the key part (e.g., if answer contains "RED" or "red", accept that)
+    // Extract single word answers (like "red", "blue", "8", etc.)
+    const singleWordPattern = /\b(red|blue|green|yellow|black|white|\d+)\b/i
+    const correctKey = correctText.match(singleWordPattern)?.[0]
+    const userKey = userText.match(singleWordPattern)?.[0]
+    
+    if (correctKey && userKey && correctKey.toLowerCase() === userKey.toLowerCase()) {
+      return true
+    }
+    
+    // Final fallback: check if user answer is contained in correct answer or vice versa
+    // (useful for answers like "The answer is 8" vs user input "8")
+    if (correctText.includes(userText) || userText.includes(correctText)) {
+      // But only if the match is substantial (at least 2 characters)
+      if (userText.length >= 2) {
+        return true
+      }
+    }
+    
+    return false
+  }
+
+  const handleAnswerSubmit = (questionId: string, correctAnswer: string) => {
+    const userAnswer = userAnswers[questionId] || ''
+    if (!userAnswer.trim()) return
+
+    const isCorrect = checkAnswer(questionId, correctAnswer, userAnswer)
+    setAnswerFeedback({ ...answerFeedback, [questionId]: isCorrect })
+  }
+
+  const handleAnswerChange = (questionId: string, value: string) => {
+    setUserAnswers({ ...userAnswers, [questionId]: value })
+    // Clear feedback when user types
+    if (answerFeedback[questionId] !== null) {
+      setAnswerFeedback({ ...answerFeedback, [questionId]: null })
+    }
+  }
+
+  const handleDownloadPDF = () => {
+    if (!interviewFlow) return
+
+    setLoading(true)
+    setError(null)
+    try {
+      // Create new PDF document
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      })
+
+      // Helper function to add watermark on each page (single diagonal)
+      const addWatermark = () => {
+        doc.setTextColor(220, 220, 220) // Light gray for watermark
+        doc.setFontSize(10)
+        doc.setFont('helvetica', 'normal')
+        const watermarkText = 'ESCP Finance +'
+        
+        // Single diagonal watermark from top-left to bottom-right
+        doc.text(watermarkText, 105, 150, { align: 'center', angle: 45 })
+        
+        doc.setTextColor(0, 0, 0) // Reset to black
+      }
+
+      // Title page
+      doc.setTextColor(0, 0, 0) // Black text
+      doc.setFontSize(28)
+      doc.setFont('helvetica', 'bold')
+      doc.text(interviewFlow.title, 105, 100, { align: 'center', maxWidth: 180 })
+      
+      doc.setFontSize(16)
+      doc.setFont('helvetica', 'normal')
+      doc.text('Custom Mock Interview', 105, 120, { align: 'center' })
+      
+      doc.setFontSize(12)
+      doc.text(`Track: ${interviewFlow.track.charAt(0).toUpperCase() + interviewFlow.track.slice(1)}`, 105, 145, { align: 'center' })
+      doc.text(`Company Type: ${interviewFlow.companyType === 'bank' ? 'Bank' : 'Hedge Fund'}`, 105, 160, { align: 'center' })
+      
+      doc.setFontSize(10)
+      doc.text(`Generated on ${new Date().toLocaleDateString()}`, 105, 280, { align: 'center' })
+      
+      addWatermark()
+
+      // New page for content
+      doc.addPage()
+      addWatermark()
+
+      // Helper function to check if we need a new page and add it if needed
+      const checkNewPage = (requiredHeight: number, currentY: number) => {
+        const pageHeight = 297 // A4 height in mm
+        const marginBottom = 20 // Bottom margin
+        const maxY = pageHeight - marginBottom
+        
+        if (currentY + requiredHeight > maxY) {
+          doc.addPage()
+          addWatermark()
+          return 30 // Start Y position on new page
+        }
+        return currentY
+      }
+
+      // Add sections
+      let yPos = 30 // Start position for first section
+      interviewFlow.sections.forEach((section, sectionIdx) => {
+        // Check if we need a new page before starting a new section (except first one)
+        if (sectionIdx > 0) {
+          // Calculate approximate height needed for section title
+          const sectionTitleHeight = 30
+          yPos = checkNewPage(sectionTitleHeight, yPos)
+          // Add extra space between sections
+          yPos += 10
+        }
+
+        // Section title - clean it first
+        doc.setTextColor(0, 0, 0) // Black
+        doc.setFontSize(16)
+        doc.setFont('helvetica', 'bold')
+        // Clean section title - remove any leading numbers or duplicates
+        let cleanSectionTitle = section.title.trim()
+        cleanSectionTitle = cleanSectionTitle.replace(/^\d+\.\s*(\d+\.\s*)?/, '')
+        const sectionTitle = `Section ${sectionIdx + 1}: ${cleanSectionTitle}`
+        doc.text(sectionTitle, 20, yPos)
+        yPos += 18 // More space after section title
+        
+        // Section description
+        if (section.description) {
+          yPos = checkNewPage(20, yPos)
+          doc.setTextColor(60, 60, 60) // Dark gray for description
+          doc.setFontSize(10)
+          doc.setFont('helvetica', 'italic')
+          const descLines = doc.splitTextToSize(section.description, 170)
+          const descHeight = descLines.length * 5
+          doc.text(descLines, 20, yPos)
+          yPos += descHeight + 15 // More space after description
+        } else {
+          yPos += 10 // More space even without description
+        }
+
+        // Questions
+        section.questions.forEach((question, qIdx) => {
+          // Clean answer text first
+          let cleanAnswer = question.answer.trim()
+          cleanAnswer = cleanAnswer.replace(/^(Answer|An)\s*:?\s*/i, '')
+          
+          // Clean hint text if exists
+          let cleanHint = question.hint ? question.hint.trim().replace(/^Hint\s*:?\s*/i, '') : ''
+          
+          // Calculate required height for question
+          doc.setFontSize(11)
+          const questionText = `Q${qIdx + 1}: ${question.question}`
+          const questionLines = doc.splitTextToSize(questionText, 170)
+          const questionHeight = questionLines.length * 6 + 15 // More space
+          
+          // Calculate hint height if exists
+          let hintHeight = 0
+          let hintLines: string[] = []
+          if (question.hint && cleanHint) {
+            doc.setFontSize(9)
+            hintLines = doc.splitTextToSize(cleanHint, 160)
+            // Height includes: label "Hint:" (5mm) + spacing (4mm) + text lines (5mm per line) + padding (6mm)
+            hintHeight = Math.max(20, hintLines.length * 5 + 15)
+          }
+          
+          // Calculate answer height (with cleaned text)
+          doc.setFontSize(9)
+          const answerLines = doc.splitTextToSize(cleanAnswer, 160)
+          // Height includes: label "Answer:" (5mm) + spacing (4mm) + text lines (5mm per line) + padding (6mm top/bottom)
+          const answerHeight = Math.max(20, answerLines.length * 5 + 15)
+          
+          const totalHeight = questionHeight + hintHeight + answerHeight + 10 // Extra buffer
+          
+          // Check if we need a new page BEFORE starting the question
+          yPos = checkNewPage(totalHeight, yPos)
+
+          // Question number and text
+          doc.setTextColor(0, 0, 0) // Black
+          doc.setFontSize(11)
+          doc.setFont('helvetica', 'bold')
+          doc.text(questionLines, 20, yPos)
+          yPos += questionLines.length * 6 + 15 // More space after question
+
+          // Hint box
+          if (question.hint && cleanHint && hintLines.length > 0) {
+            // Re-check space for hint
+            yPos = checkNewPage(hintHeight + 5, yPos)
+            
+            doc.setFontSize(9)
+            // Calculate box height: label (5mm) + spacing (4mm) + text lines (5mm per line) + padding (6mm)
+            const boxHeight = Math.max(20, hintLines.length * 5 + 15)
+            
+            // Make sure box doesn't go off the page
+            const pageHeight = 297
+            const maxBoxBottom = pageHeight - 20
+            if (yPos + boxHeight > maxBoxBottom) {
+              doc.addPage()
+              addWatermark()
+              yPos = 30
+            }
+            
+            doc.setDrawColor(200, 200, 200) // Light gray border
+            doc.setFillColor(250, 250, 250) // Very light gray background
+            doc.roundedRect(20, yPos - 2, 170, boxHeight, 1, 1, 'FD')
+            doc.setTextColor(0, 0, 0) // Black
+            doc.setFont('helvetica', 'bold')
+            doc.text('Hint:', 25, yPos + 5)
+            doc.setFont('helvetica', 'normal')
+            // Add space between "Hint:" label and the hint text
+            const hintTextStartY = yPos + 9
+            doc.text(hintLines, 30, hintTextStartY)
+            yPos += boxHeight + 18 // More space after hint box
+          }
+
+          // Answer box
+          // Re-check space for answer
+          yPos = checkNewPage(answerHeight + 5, yPos)
+          
+          doc.setFontSize(9)
+          // Calculate box height: label (5mm) + spacing (4mm) + text lines (5mm per line) + padding (6mm)
+          const answerBoxHeight = Math.max(20, answerLines.length * 5 + 15)
+          
+          // Make sure box doesn't go off the page
+          const pageHeight = 297
+          const maxBoxBottom = pageHeight - 20 // Leave margin at bottom
+          if (yPos + answerBoxHeight > maxBoxBottom) {
+            doc.addPage()
+            addWatermark()
+            yPos = 30
+          }
+          
+          doc.setDrawColor(150, 150, 150) // Gray border
+          doc.setFillColor(245, 245, 245) // Light gray background
+          doc.roundedRect(20, yPos - 2, 170, answerBoxHeight, 1, 1, 'FD')
+          doc.setTextColor(0, 0, 0) // Black
+          doc.setFont('helvetica', 'bold')
+          doc.text('Answer:', 25, yPos + 5)
+          doc.setFont('helvetica', 'normal')
+          // Add space between "Answer:" label and the answer text
+          // Calculate starting Y for text: label at yPos+5, then 4mm spacing
+          const textStartY = yPos + 9
+          doc.text(answerLines, 30, textStartY)
+          yPos += answerBoxHeight + 15 // Reduced space after answer box (before next question)
+        })
+      })
+
+      // Save PDF
+      doc.save(`${interviewFlow.track}-${interviewFlow.companyType}-interview.pdf`)
+      
+    } catch (error) {
+      console.error('Error generating PDF:', error)
+      setError('Failed to generate PDF. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const tradingDesks: Array<{ id: AssetCategory; label: string; icon: React.ElementType; color: string }> = [
+    { id: 'equity', label: 'Equity Trading', icon: TrendingUp, color: '#10b981' },
+    { id: 'fixed-income', label: 'Fixed Income', icon: Briefcase, color: '#6366f1' },
+    { id: 'commodities', label: 'Commodities', icon: Briefcase, color: '#f59e0b' },
+    { id: 'credit', label: 'Credit Trading', icon: Briefcase, color: '#ef4444' },
+    { id: 'foreign-exchange', label: 'Foreign Exchange', icon: Briefcase, color: '#8b5cf6' },
+    { id: 'rates-derivatives', label: 'Rates Derivatives', icon: Briefcase, color: '#06b6d4' },
+    { id: 'structured-products', label: 'Structured Products', icon: Briefcase, color: '#ec4899' },
+  ]
+
+  if (!profile) {
+    return (
+      <div className="min-h-screen gradient-bg flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-[#2563eb]" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen gradient-bg">
+      <DashboardNav profile={profile} onOpenStats={() => {}} blockType={null} />
+
+      <main className="pt-16 sm:pt-24 pb-12 px-4 sm:px-6">
+        <div className="max-w-5xl mx-auto">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center gap-2 bg-[#1f2937] border border-[#374151] text-[#2563eb] px-4 py-2 rounded-full mb-4">
+              <Sparkles className="w-5 h-5" />
+              <span className="font-semibold">Custom Interview</span>
+            </div>
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-4">
+              Custom Interview Questions
+            </h1>
+            <p className="text-[#9ca3af] text-base sm:text-lg">
+              Get personalized questions tailored to your target role and company
+            </p>
+          </div>
+
+          {/* Progress Steps */}
+          <div className="flex items-center justify-center mb-8 px-2">
+            {[1, 2, 3, 4].map((s) => (
+              <div key={s} className="flex items-center">
+                <div
+                  className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-sm sm:text-base font-bold transition-all ${
+                    step >= s
+                      ? 'bg-[#2563eb] text-white'
+                      : 'bg-[#1f2937] text-[#6b7280]'
+                  }`}
+                >
+                  {step > s ? <Check className="w-4 h-4 sm:w-5 sm:h-5" /> : s}
+                </div>
+                {s < 4 && (
+                  <div
+                    className={`w-8 sm:w-12 md:w-16 h-1 mx-1 sm:mx-2 transition-all ${
+                      step > s ? 'bg-[#2563eb]' : 'bg-[#1f2937]'
+                    }`}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Step Content */}
+          <div className="bg-[#111827] border border-[#1f2937] rounded-2xl p-6 sm:p-8">
+            {/* Step 1: Block Type */}
+            {step === 1 && (
+              <div>
+                <h2 className="text-2xl font-bold mb-2">Choose Your Track</h2>
+                <p className="text-[#9ca3af] mb-6">Select the role you're interviewing for</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {[
+                    { id: 'sales' as BlockType, label: 'Sales', icon: Users, color: '#6366f1' },
+                    { id: 'trading' as BlockType, label: 'Trading', icon: TrendingUp, color: '#2563eb' },
+                    { id: 'quant' as BlockType, label: 'Quant', icon: Calculator, color: '#10b981' },
+                  ].map((block) => {
+                    const Icon = block.icon
+                    return (
+                      <button
+                        key={block.id}
+                        onClick={() => {
+                          setBlockType(block.id)
+                          setTimeout(() => setStep(2), 300)
+                        }}
+                        className={`p-6 rounded-xl border-2 transition-all text-left ${
+                          blockType === block.id
+                            ? 'border-[#2563eb] bg-[#2563eb]/10'
+                            : 'border-[#1f2937] hover:border-[#374151]'
+                        }`}
+                      >
+                        <div
+                          className="w-12 h-12 rounded-lg flex items-center justify-center mb-4"
+                          style={{ backgroundColor: `${block.color}20` }}
+                        >
+                          <Icon className="w-6 h-6" style={{ color: block.color }} />
+                        </div>
+                        <h3 className="text-xl font-bold mb-2">{block.label}</h3>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Step 2: Asset Selection (for all tracks) */}
+            {step === 2 && blockType && (
+              <div>
+                <button
+                  onClick={() => setStep(1)}
+                  className="flex items-center gap-2 text-[#9ca3af] hover:text-white mb-6 transition-colors"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  Back
+                </button>
+                <h2 className="text-2xl font-bold mb-2">Choose Asset Class</h2>
+                <p className="text-[#9ca3af] mb-6">Select the asset class to get targeted interview questions</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {tradingDesks.map((desk) => {
+                    const Icon = desk.icon
+                    return (
+                      <button
+                        key={desk.id}
+                        onClick={() => {
+                          setTradingDesk(desk.id)
+                          setTimeout(() => setStep(3), 300)
+                        }}
+                        className={`p-6 rounded-xl border-2 transition-all text-left ${
+                          tradingDesk === desk.id
+                            ? 'border-[#2563eb] bg-[#2563eb]/10'
+                            : 'border-[#1f2937] hover:border-[#374151]'
+                        }`}
+                      >
+                        <div
+                          className="w-12 h-12 rounded-lg flex items-center justify-center mb-4"
+                          style={{ backgroundColor: `${desk.color}20` }}
+                        >
+                          <Icon className="w-6 h-6" style={{ color: desk.color }} />
+                        </div>
+                        <h3 className="text-xl font-bold">{desk.label}</h3>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Step 3: Company Type (for all tracks) */}
+            {step === 3 && blockType && tradingDesk && (
+              <div>
+                <button
+                  onClick={() => setStep(2)}
+                  className="flex items-center gap-2 text-[#9ca3af] hover:text-white mb-6 transition-colors"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  Back
+                </button>
+                <h2 className="text-2xl font-bold mb-2">Choose Company Type</h2>
+                <p className="text-[#9ca3af] mb-6">Select the type of financial institution</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {[
+                    { id: 'bank' as CompanyType, label: 'Bank', icon: Building2, color: '#6366f1' },
+                    { id: 'hedge-fund' as CompanyType, label: 'Hedge Fund', icon: Briefcase, color: '#2563eb' },
+                  ].map((company) => {
+                    const Icon = company.icon
+                    return (
+                      <button
+                        key={company.id}
+                        onClick={() => {
+                          setCompanyType(company.id)
+                          setTimeout(() => setStep(4), 300)
+                        }}
+                        className={`p-6 rounded-xl border-2 transition-all text-left ${
+                          companyType === company.id
+                            ? 'border-[#2563eb] bg-[#2563eb]/10'
+                            : 'border-[#1f2937] hover:border-[#374151]'
+                        }`}
+                      >
+                        <div
+                          className="w-12 h-12 rounded-lg flex items-center justify-center mb-4"
+                          style={{ backgroundColor: `${company.color}20` }}
+                        >
+                          <Icon className="w-6 h-6" style={{ color: company.color }} />
+                        </div>
+                        <h3 className="text-xl font-bold">{company.label}</h3>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Step 4: Interview Flow */}
+            {step === 4 && interviewFlow && (
+              <div>
+                <div className="flex items-center justify-between mb-6">
+                  <button
+                    onClick={() => setStep(3)}
+                    className="flex items-center gap-2 text-[#9ca3af] hover:text-white transition-colors"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    Back
+                  </button>
+                  <button
+                    onClick={handleDownloadPDF}
+                    disabled={loading}
+                    className="flex items-center gap-2 bg-[#2563eb] hover:bg-[#ea580c] text-white px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4" />
+                        Download PDF
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Error Message */}
+                {error && (
+                  <div className="mb-6 flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-xl">
+                    <XCircle className="w-5 h-5 flex-shrink-0" />
+                    <p className="text-sm">{error}</p>
+                  </div>
+                )}
+
+                {/* Interview Header */}
+                <div className="mb-8 pb-6 border-b border-[#1f2937]">
+                  <h2 className="text-3xl font-bold mb-3">{interviewFlow.title}</h2>
+                  <div className="space-y-2">
+                    <p className="text-[#9ca3af]">
+                      <span className="font-semibold text-white">Goal:</span> {interviewFlow.goal}
+                    </p>
+                    <p className="text-[#9ca3af]">
+                      <span className="font-semibold text-white">Mindset tested:</span> "{interviewFlow.mindset}"
+                    </p>
+                  </div>
+                </div>
+
+                {loading ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Loader2 className="w-8 h-8 animate-spin text-[#2563eb]" />
+                  </div>
+                ) : (
+                  <div className="space-y-8">
+                    {interviewFlow.sections.map((section, sectionIdx) => (
+                      <div key={sectionIdx} className="bg-[#1f2937] border border-[#374151] rounded-xl p-6">
+                        <h3 className="text-xl font-bold mb-4 text-[#2563eb]">{section.title}</h3>
+                        {section.description && (
+                          <p className="text-[#9ca3af] mb-4">{section.description}</p>
+                        )}
+                        
+                        <div className="space-y-6">
+                          {section.questions.map((question, qIdx) => {
+                            const isProbability = question.category === 'probability'
+                            const userAnswer = userAnswers[question.id] || ''
+                            const feedback = answerFeedback[question.id]
+                            const showFeedback = feedback !== null && feedback !== undefined
+
+                            return (
+                              <div key={question.id} className="bg-[#0a0f1a] border border-[#374151] rounded-lg p-5">
+                                <div className="flex items-start gap-4">
+                                  <div className="w-8 h-8 rounded-full bg-[#2563eb] flex items-center justify-center font-bold flex-shrink-0 text-sm">
+                                    {qIdx + 1}
+                                  </div>
+                                  <div className="flex-1">
+                                    <h4 className="font-semibold mb-3 text-white">{question.question}</h4>
+                                    {question.hint && (
+                                      <div className="mb-3 p-3 bg-[#1f2937] rounded border-l-2 border-[#6366f1]">
+                                        <p className="text-sm text-[#9ca3af]">
+                                          <span className="font-medium text-[#6366f1]">Hint:</span> {question.hint}
+                                        </p>
+                                      </div>
+                                    )}
+                                    
+                                    {isProbability ? (
+                                      // Interactive answer input for probability questions
+                                      <div className="mt-4 pt-4 border-t border-[#374151]">
+                                        <div className="space-y-3">
+                                          <div className="flex gap-3">
+                                            <input
+                                              type="text"
+                                              value={userAnswer}
+                                              onChange={(e) => handleAnswerChange(question.id, e.target.value)}
+                                              onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                  handleAnswerSubmit(question.id, question.answer)
+                                                }
+                                              }}
+                                              placeholder="Enter your answer..."
+                                              className="flex-1 bg-[#111827] border border-[#374151] rounded-lg px-4 py-2 text-white placeholder-[#6b7280] focus:outline-none focus:border-[#2563eb] transition-colors"
+                                            />
+                                            <button
+                                              onClick={() => handleAnswerSubmit(question.id, question.answer)}
+                                              disabled={!userAnswer.trim()}
+                                              className="px-6 py-2 bg-[#2563eb] hover:bg-[#ea580c] text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                              Check
+                                            </button>
+                                          </div>
+                                          
+                                          {showFeedback && (
+                                            <div className={`flex items-center gap-2 p-3 rounded-lg ${
+                                              feedback 
+                                                ? 'bg-green-500/10 border border-green-500/30' 
+                                                : 'bg-red-500/10 border border-red-500/30'
+                                            }`}>
+                                              {feedback ? (
+                                                <>
+                                                  <CheckCircle className="w-5 h-5 text-green-400" />
+                                                  <span className="text-green-400 font-medium">Correct!</span>
+                                                </>
+                                              ) : (
+                                                <>
+                                                  <XCircle className="w-5 h-5 text-red-400" />
+                                                  <span className="text-red-400 font-medium">Incorrect. Try again!</span>
+                                                </>
+                                              )}
+                                            </div>
+                                          )}
+
+                                          {showFeedback && !feedback && (
+                                            <div className="mt-3 p-3 bg-[#1f2937] rounded border-l-2 border-[#6366f1]">
+                                              <p className="text-sm text-[#9ca3af]">
+                                                <span className="font-medium text-[#6366f1]">Correct Answer:</span> {question.answer}
+                                              </p>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      // Regular answer display for non-probability questions
+                                      <div className="mt-4 pt-4 border-t border-[#374151]">
+                                        <p className="text-sm text-[#6b7280] leading-relaxed">
+                                          <span className="font-medium text-[#9ca3af]">Answer:</span> {question.answer}
+                                        </p>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </main>
+    </div>
+  )
+}
