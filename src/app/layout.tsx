@@ -22,7 +22,7 @@ export const metadata: Metadata = {
     title: "ESCP Finance + | Finance Interview Prep",
     description: "Master Finance Interviews with Confidence. Practice mental math, probability puzzles, trading intuition, Greeks, behavioral questions, and ML concepts.",
   },
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')),
 };
 
 export default function RootLayout({
